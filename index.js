@@ -23,61 +23,67 @@ app.post('/run_fbi_assistant', async (req, res) => {
       return res.status(400).json({ error: 'thread array is required' });
     }
 
-    /* 1️⃣  Create a temporary assistant with the specific vector store */
-    const tempAssistant = await openai.beta.assistants.create({
-      name: "FBI Document Search Assistant",
-      instructions: "You are an FBI document analyst. Search through the attached FBI documents to answer questions with specific quotes and document references. Provide detailed, factual responses based only on the document content.",
-      model: "gpt-4-turbo-preview",
-      tools: [{ "type": "file_search" }],
-      tool_resources: {
-        "file_search": {
-          "vector_store_ids": ["vs_68666bdc4aa08191a99e514a4b89dbfd"]
-        }
-      }
-    });
+    console.log('Using thread:', JSON.stringify(thread, null, 2));
 
-    console.log('Created temporary assistant:', tempAssistant.id);
-
-    /* 2️⃣  Create a thread with the user messages */
+    /* 1️⃣  Create a thread with the user-supplied messages */
     const createdThread = await openai.beta.threads.create({
       messages: thread
     });
 
-    /* 3️⃣  Run the temporary assistant */
+    console.log('Created thread:', createdThread.id);
+
+    /* 2️⃣  Run the working assistant (the one that works in platform.openai.com) */
     const run = await openai.beta.threads.runs.create(createdThread.id, {
-      assistant_id: tempAssistant.id
+      assistant_id: 'asst_lZh3NpiqqpIgSHggXYI6IDl5'
     });
 
-    /* 4️⃣  Poll until the run is finished */
+    console.log('Started run:', run.id, 'with assistant asst_lZh3NpiqqpIgSHggXYI6IDl5');
+
+    /* 3️⃣  Poll until the run is finished */
     let status;
+    let pollCount = 0;
     do {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 1000));        // 1-second back-off
       const poll = await openai.beta.threads.runs.retrieve(
         createdThread.id,
         run.id
       );
       status = poll.status;
-      console.log('Run status:', status);
-    } while (status !== 'completed' && status !== 'failed');
+      pollCount++;
+      console.log(`Poll ${pollCount}: Run status: ${status}`);
+      
+      // Add more detailed status info
+      if (poll.last_error) {
+        console.log('Run error:', poll.last_error);
+      }
+      
+    } while (status !== 'completed' && status !== 'failed' && pollCount < 60); // Max 60 seconds
 
     if (status === 'failed') {
-      // Clean up the temporary assistant
-      await openai.beta.assistants.del(tempAssistant.id);
+      console.log('Run failed');
       return res.status(500).json({ error: 'assistant run failed' });
     }
 
-    /* 5️⃣  Get the assistant's response */
-    const messages = await openai.beta.threads.messages.list(createdThread.id);
-    const answer = messages.data.at(-1)?.content?.[0]?.text?.value ?? '[no content]';
+    if (status !== 'completed') {
+      console.log('Run timed out, status:', status);
+      return res.status(500).json({ error: 'assistant run timed out' });
+    }
 
-    /* 6️⃣  Clean up the temporary assistant */
-    await openai.beta.assistants.del(tempAssistant.id);
+    /* 4️⃣  Grab the assistant's final message */
+    const messages = await openai.beta.threads.messages.list(createdThread.id);
+    console.log('Messages retrieved, count:', messages.data.length);
     
-    console.log('Generated answer:', answer);
+    const lastMessage = messages.data.at(-1);
+    console.log('Last message:', JSON.stringify(lastMessage, null, 2));
+    
+    const answer = lastMessage?.content?.[0]?.text?.value ?? '[no content]';
+
+    /* 🔍  Log the raw answer so you can inspect citations in Render logs */
+    console.log('ASSISTANT ANSWER →', answer);
 
     res.json({ answer });
   } catch (err) {
-    console.error('Error:', err);
+    console.error('Full error:', err);
     res.status(500).json({ error: 'server error: ' + err.message });
   }
 });
