@@ -73,10 +73,11 @@ app.post('/run_fbi_assistant', async (req, res) => {
     const messages = await openai.beta.threads.messages.list(createdThread.id);
     console.log('Messages retrieved, count:', messages.data.length);
     
-    const lastMessage = messages.data.at(-1);
-    console.log('Last message:', JSON.stringify(lastMessage, null, 2));
+    // Find the most recent assistant message (not user message)
+    const assistantMessage = messages.data.find(msg => msg.role === 'assistant');
+    console.log('Assistant message:', JSON.stringify(assistantMessage, null, 2));
     
-    const answer = lastMessage?.content?.[0]?.text?.value ?? '[no content]';
+    const answer = assistantMessage?.content?.[0]?.text?.value ?? '[no assistant response found]';
 
     /* 🔍  Log the raw answer so you can inspect citations in Render logs */
     console.log('ASSISTANT ANSWER →', answer);
